@@ -27,6 +27,9 @@ PACKAGES  := $$($(PACKAGE_LIST))
 PACKAGE_DIRECTORIES := $(PACKAGE_LIST) | sed 's|github.com/pingcap/$(PROJECT)/||'
 FILES := $$(find . -name '*.go' -type f | grep -vE 'vendor' | grep -vE 'binlog.pb.go')
 
+FAILPOINT_ENABLE  := $$(find $$PWD/ -type d | grep -vE "(\.git|tools)" | xargs tools/bin/failpoint-ctl enable)
+FAILPOINT_DISABLE := $$(find $$PWD/ -type d | grep -vE "(\.git|tools)" | xargs tools/bin/failpoint-ctl disable)
+
 LDFLAGS += -X "github.com/pingcap/tidb-binlog/pkg/version.BuildTS=$(shell date -u '+%Y-%m-%d %I:%M:%S')"
 LDFLAGS += -X "github.com/pingcap/tidb-binlog/pkg/version.GitHash=$(shell git rev-parse HEAD)"
 LDFLAGS += -X "github.com/pingcap/tidb-binlog/pkg/version.ReleaseVersion=$(shell git describe --tags --dirty)"
@@ -60,10 +63,11 @@ binlogctl:
 install:
 	go install ./...
 
-test:
+test: failpoint-enable
 	mkdir -p "$(TEST_DIR)"
 	@export log_level=error;\
 	$(GOTEST) -cover -covermode=count -coverprofile="$(TEST_DIR)/cov.unit.out" $(PACKAGES)
+	@$(FAILPOINT_DISABLE)
 
 integration_test: build
 	@which bin/tidb-server
@@ -113,6 +117,14 @@ clean:
 	go clean -i ./...
 	rm -rf *.out
 
+failpoint-enable: tools/bin/failpoint-ctl
+# Converting gofail failpoints...
+	@$(FAILPOINT_ENABLE)
+
+failpoint-disable: tools/bin/failpoint-ctl
+# Restoring gofail failpoints...
+	@$(FAILPOINT_DISABLE)
+
 tools/bin/revive: tools/check/go.mod
 	cd tools/check; \
 	$(GO) build -o ../bin/revive github.com/mgechev/revive
@@ -120,3 +132,6 @@ tools/bin/revive: tools/check/go.mod
 tools/bin/golangci-lint: tools/check/go.mod
 	cd tools/check; \
 	$(GO) build -o ../bin/golangci-lint github.com/golangci/golangci-lint/cmd/golangci-lint
+
+tools/bin/failpoint-ctl: go.mod
+	$(GO) build -o $@ github.com/pingcap/failpoint/failpoint-ctl

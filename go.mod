@@ -16,6 +16,7 @@ require (
 	github.com/pierrec/lz4 v2.0.5+incompatible // indirect
 	github.com/pingcap/check v0.0.0-20190102082844-67f458068fc8
 	github.com/pingcap/errors v0.11.4
+	github.com/pingcap/failpoint v0.0.0-20190708053854-e7b1061e6e81
 	github.com/pingcap/kvproto v0.0.0-20190703131923-d9830856b531
 	github.com/pingcap/log v0.0.0-20190307075452-bd41d9273596
 	github.com/pingcap/parser v0.0.0-20190709031113-f5e853fce911
