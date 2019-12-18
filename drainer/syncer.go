@@ -109,6 +109,11 @@ func createDSyncer(cfg *SyncerConfig, schema *Schema) (dsyncer dsync.Syncer, err
 			return nil, errors.Annotate(err, "fail to create mysql dsyncer")
 		}
 		// only use for test
+	case "show-ddl":
+		dsyncer, err = dsync.NewDDLSyncer(schema)
+		if err != nil {
+			return nil, errors.Annotate(err, "fail to create ddl dsyncer")
+		}
 	case "_intercept":
 		dsyncer = newInterceptSyncer()
 	default:

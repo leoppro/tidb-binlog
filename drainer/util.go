@@ -108,7 +108,7 @@ func GenCheckPointCfg(cfg *Config, id uint64) (*checkpoint.Config, error) {
 				Password: cfg.SyncerCfg.To.Password,
 				Port:     cfg.SyncerCfg.To.Port,
 			}
-		case "pb", "file":
+		case "pb", "file", "show-ddl":
 			checkpointCfg.CheckpointType = "file"
 		case "kafka":
 			checkpointCfg.CheckpointType = "file"
