@@ -789,6 +789,7 @@ func isFakeBinlog(binlog *pb.Binlog) bool {
 
 // WriteBinlog implement Storage.WriteBinlog
 func (a *Append) WriteBinlog(binlog *pb.Binlog) error {
+	log.Info("binlog in WriteBinlog", zap.Reflect("binlog", binlog))
 	if !a.writableOfSpace() {
 		// still accept fake binlog, so will not block drainer if fake binlog writes success
 		if !isFakeBinlog(binlog) {
@@ -835,6 +836,7 @@ func (a *Append) writeBinlog(binlog *pb.Binlog) *request {
 	request.tp = binlog.Tp
 	request.wg.Add(1)
 
+	log.Info("Binlog into request", zap.Stringer("binlog", binlog))
 	a.writeCh <- request
 
 	request.wg.Wait()
@@ -1071,10 +1073,17 @@ func (a *Append) feedPreWriteValue(cbinlog *pb.Binlog) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
+	if cbinlog.StartTs == 413282446273937409 {
+		log.Info("CCCCC", zap.Reflect("vp", vp))
+	}
 
 	pvalue, err := a.vlog.readValue(vp)
 	if err != nil {
 		return errors.Annotatef(err, "read P-Binlog value failed, vp: %+v", vp)
+	}
+
+	if cbinlog.StartTs == 413282446273937409 {
+		log.Info("CCCCC", zap.Reflect("pvalue", pvalue))
 	}
 
 	pbinlog := new(pb.Binlog)
@@ -1083,8 +1092,19 @@ func (a *Append) feedPreWriteValue(cbinlog *pb.Binlog) error {
 		return errors.Trace(err)
 	}
 
+	if cbinlog.StartTs == 413282446273937409 {
+		log.Info("CCCCC", zap.Reflect("pbinlog", pbinlog))
+	}
+
 	cbinlog.StartTs = pbinlog.StartTs
 	cbinlog.PrewriteValue = pbinlog.PrewriteValue
+	cbinlog.DdlQuery = pbinlog.DdlQuery
+	cbinlog.DdlJobId = pbinlog.DdlJobId
+	cbinlog.DdlSchemaState = pbinlog.DdlSchemaState
+
+	if cbinlog.StartTs == 413282446273937409 {
+		log.Info("CCCCC", zap.Reflect("cbinlog", cbinlog))
+	}
 
 	return nil
 }
@@ -1225,6 +1245,135 @@ func (a *Append) PullCommitBinlog(ctx context.Context, last int64) <-chan []byte
 	}()
 
 	return values
+}
+
+func (a *Append) PullCommitBinlogForDebug(ctx context.Context, last int64) {
+	log.Debug("new PullCommitBinlogForDebug", zap.Int64("last ts", last))
+
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-a.close:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	gcTS := atomic.LoadInt64(&a.gcTS)
+	if last < gcTS {
+		log.Warn("last ts less than gcTS", zap.Int64("last ts", last), zap.Int64("gcTS", gcTS))
+		last = gcTS
+	}
+
+	irange := &util.Range{
+		Start: encodeTSKey(0),
+		Limit: encodeTSKey(math.MaxInt64),
+	}
+
+	pLog := pkgutil.NewLog()
+	labelWrongRange := "wrong range"
+	pLog.Add(labelWrongRange, 10*time.Second)
+
+	func() {
+
+		for {
+			startTS := last + 1
+			limitTS := atomic.LoadInt64(&a.maxCommitTS) + 1
+			if startTS > limitTS {
+				// if range's start is greater than limit, may cause panic, see https://github.com/syndtr/goleveldb/issues/224 for detail.
+				pLog.Print(labelWrongRange, func() {
+					log.Warn("last ts is greater than pump's max commit ts", zap.Int64("last ts", startTS-1), zap.Int64("max commit ts", limitTS-1))
+				})
+				time.Sleep(time.Second)
+				continue
+			}
+
+			irange.Start = encodeTSKey(startTS)
+			irange.Limit = encodeTSKey(limitTS)
+			iter := a.metadata.NewIterator(irange, nil)
+
+			// log.Debugf("try to get range [%d,%d)", startTS, atomic.LoadInt64(&a.maxCommitTS)+1)
+
+			for ok := iter.Seek(encodeTSKey(startTS)); ok; ok = iter.Next() {
+				var vp valuePointer
+				err := vp.UnmarshalBinary(iter.Value())
+				// should never happen
+				if err != nil {
+					panic(err)
+				}
+
+				log.Debug("get binlog", zap.Int64("ts", decodeTSKey(iter.Key())), zap.Reflect("pointer", vp))
+
+				value, err := a.vlog.readValue(vp)
+				if err != nil {
+					log.Error("read value failed", zap.Error(err))
+					iter.Release()
+					errorCount.WithLabelValues("read_value").Add(1.0)
+					return
+				}
+
+				binlog := new(pb.Binlog)
+				err = binlog.Unmarshal(value)
+				if err != nil {
+					log.Error("Unmarshal Binlog failed", zap.Error(err))
+					iter.Release()
+					return
+				}
+
+				if binlog.Tp == pb.BinlogType_Prewrite {
+					continue
+				}
+				err = a.feedPreWriteValue(binlog)
+				if binlog.GetStartTs() == 413282446273937409 {
+					log.Info("AAAAAAAAAAA", zap.Stringer("binlog", binlog))
+				}
+				if binlog.GetCommitTs() == 413282446575403011 {
+					log.Info("BBBBBBBBBBB", zap.Stringer("binlog", binlog))
+				}
+				if err != nil {
+					if errors.Cause(err) == leveldb.ErrNotFound {
+						// In pump-client, a C-binlog should always be sent to the same pump instance as the matching P-binlog.
+						// But in some older versions of pump-client, writing of C-binlog would fallback to some other instances when the correct one is unavailable.
+						// When this error occurs, we may assume that the matching P-binlog is on a different pump instance.
+						// And it would  query TiKV for the matching C-binlog. So it should be OK to ignore the error here.
+						log.Error("Matching P-binlog not found", zap.Int64("commit ts", binlog.CommitTs))
+						continue
+					}
+
+					errorCount.WithLabelValues("feed_pre_write_value").Add(1.0)
+					log.Error("feed pre write value failed", zap.Error(err))
+					iter.Release()
+					return
+				}
+				if binlog.GetDdlJobId() != 0 {
+					log.Info("show ddl", zap.String("query", string(binlog.GetDdlQuery())),
+						zap.Int64("startts", binlog.GetStartTs()),
+						zap.Int64("committs", binlog.GetCommitTs()),
+						zap.Int64("jobID", binlog.GetDdlJobId()),
+					)
+				}
+				select {
+				case <-ctx.Done():
+					iter.Release()
+					return
+				default:
+				}
+				last = decodeTSKey(iter.Key())
+			}
+			iter.Release()
+			err := iter.Error()
+			if err != nil {
+				log.Error("encounter iterator error", zap.Error(err))
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+				// TODO signal to wait up, don't sleep
+			case <-time.After(time.Millisecond * 100):
+			}
+		}
+	}()
 }
 
 type storageSize struct {

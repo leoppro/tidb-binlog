@@ -46,6 +46,9 @@ build: pump drainer reparo arbiter binlogctl
 pump:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/pump cmd/pump/main.go
 
+pump_debug:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/pump_debug cmd/pump_debug/main.go
+
 drainer:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/drainer cmd/drainer/main.go
 

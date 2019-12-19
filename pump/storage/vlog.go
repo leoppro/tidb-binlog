@@ -118,7 +118,7 @@ func (r *request) ts() int64 {
 }
 
 func (r *request) String() string {
-	return fmt.Sprintf("{ts: %d, payload len: %d, valuePointer: %+v}", r.ts(), len(r.payload), r.valuePointer)
+	return fmt.Sprintf("{sts: %d, cts: %d,tp: %d, payload: %d, valuePointer: %+v}", r.startTS, r.commitTS, r.tp, len(r.payload), r.valuePointer)
 }
 
 type batchRequest []*request
